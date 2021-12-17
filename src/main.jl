@@ -7,6 +7,13 @@ const Period = Int64 # step of simulation
 const Effort = Float64
 const Wage = Float64
 
+mutable struct Worker <: AbstractAgent
+    id::Int64
+    Theta::Float64
+    employer::Firm
+    effort::Float64
+    utility::Float64
+end
 
 mutable struct Market
     network::Dict{Worker, Any} # TODO set of workers
@@ -35,20 +42,17 @@ function get_output(firm::Firm)
 end
 
 
-mutable struct Worker <: AbstractAgent
-    id::Int64
-    Theta::Float64
-    employer::Firm
-    effort::Float64
-    utility::Float64
-end
-
-
 function get_best_new_firm(worker::Worker)
     # TODO model social network
     startup = get_empty_firm(market)
     neighboring_firms = get_neighbor_firms(market, worker)
     all_new_firms = push!(neighboring_firms, startup)
+    all_efforts = [compute_effort(firm) for firm in all_new_firms]
+    all_sizes = [get_size(firm) + 1 for firm in all_new_firms]
+    all_outputs = [get_output(all_new_firms[i]) for i=1:length(all_new_firms)]
+    all_utilities = [compute_utility(all_outputs[i]/all_sizes[i], all_efforts[i]) for i=1:length(all_new_firms)]
+    best_index = indmax(all_utilities)
+    return [all_new_firms[best_index], all_efforts[best_index], all_utilities[best_index]]
 end
 
 function update_efforts(firm::Firm)
