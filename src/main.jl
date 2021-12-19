@@ -45,7 +45,7 @@ function get_efforts(firm::Firm)
     if isempty(firm.book)
         return 0.0
     else
-        return sum([worker.effort for worker in keys(firm.book)])
+        return sum([worker.effort for worker in firm.book])
     end
 end
 
@@ -70,11 +70,9 @@ end
 
 function update_effort(worker::Worker)
     worker.effort = optimal_effort(worker.Theta, get_efforts(worker.employer) - worker.effort)
-    o = get_output(worker.employer)
-    s = get_size(worker.employer)
-    worker.utility = compute_utility(worker.Theta,
-                                     o==0.0 && s==0.0 ? 1.0 : o/s,
-                                     worker.effort)
+    outputs = get_output(worker.employer)
+    sizes = get_size(worker.employer)
+    worker.utility = compute_utility(worker.Theta, outputs/sizes, worker.effort)
 end
 
 function separation(worker::Worker, firm::Firm)
@@ -92,12 +90,29 @@ function migration(worker::Worker, new_firm::Firm)
     hiring(worker, new_firm)
 end
 
+function get_best_firm(worker::Worker, startup::Firm, model::AgentBasedModel)
+    neighboring_firms = get_neighbor_firms(worker, model)
+    new_firms = push!(neighboring_firms, startup)
+    efforts = [compute_effort(worker.Theta, firm) for firm in new_firms]
+    println("efforts: ", efforts)
+    sizes = [get_size(firm) + 1 for firm in new_firms]
+    outputs = [get_output(firm) for firm in new_firms]
+    println("outputs: ", outputs)
+    utilities = [compute_utility(worker.Theta,
+                                 outputs[i]/sizes[i],
+                                 efforts[i])
+                 for i=1:length(new_firms)]
+    best_index = argmax(utilities)
+    return new_firms[best_index], efforts[best_index], utilities[best_index]
+end
+
 function choose_firm(worker::Worker, max_firm_id::Int64, model::AgentBasedModel)
     startup = Firm(max_firm_id, Worker[])
     new_firm, new_effort, new_utility = get_best_firm(worker, startup, model)
     update_efforts(worker.employer)
     update_effort(worker)
     if new_utility > worker.utility
+        println("migrating: ", new_utility, " <- ", worker.utility)
         migration(worker, new_firm)
         worker.effort = new_effort
         worker.utility = new_utility
@@ -122,26 +137,11 @@ function compute_effort(Theta::Float64, firm::Firm)
     return optimal_effort(Theta, E)
 end
 
-function get_best_firm(worker::Worker, startup::Firm, model::AgentBasedModel)
-    # TODO model social network
-    neighboring_firms = get_neighbor_firms(worker, model)
-    new_firms = push!(neighboring_firms, startup)
-    efforts = [compute_effort(worker.Theta, firm) for firm in new_firms]
-    sizes = [get_size(firm) + 1 for firm in new_firms]
-    outputs = [get_output(new_firms[i]) for i=1:length(new_firms)]
-    utilities = [compute_utility(worker.Theta,
-                                 outputs[i]==0.0 && sizes[i]==0.0 ? 1.0 : outputs[i]/sizes[i],
-                                 efforts[i])
-                 for i=1:length(new_firms)]
-    best_index = argmax(utilities)
-    return new_firms[best_index], efforts[best_index], utilities[best_index]
-end
-
 function update_efforts(firm::Nothing)
 end
 
 function update_efforts(firm::Firm)
-    for worker in keys(firm.book)
+    for worker in firm.book
         update_effort(worker)
     end
 end
@@ -199,25 +199,27 @@ function firms(;
         properties = properties,
         rng = MersenneTwister(seed)
     )
-    for id in 1:num_workers
+    for wid in 1:num_workers
         Theta = rand(model.rng)
         effort = optimal_effort(Theta, 0.0)
         employer = nothing
         friends = Worker[]
-        add_agent!(
-            Worker(id,
-                   Theta,
-                   employer,
-                   effort,
-                   compute_utility(Theta, effort, effort),
-                   friends
-                   ),
-            model
-        )
+        worker = Worker(wid,
+                        Theta,
+                        employer,
+                        effort,
+                        compute_utility(Theta, effort, effort),
+                        friends)
+        firm = Firm(wid, Worker[worker])
+        worker.employer = firm
+        add_agent!(worker, model)
+        # add one company for each worker
+        push!(model.firms, firm)
     end
 
-    for id in 1:num_workers
-        w = model.agents[id]
+    # social network
+    for wid in 1:num_workers
+        w = model.agents[wid]
 
         num_friends_w = 0
         while num_friends_w < num_friends
@@ -228,6 +230,7 @@ function firms(;
             end
         end
     end
+
     return model
 end
 
