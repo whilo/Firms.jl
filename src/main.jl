@@ -94,10 +94,8 @@ function get_best_firm(worker::Worker, startup::Firm, model::AgentBasedModel)
     neighboring_firms = get_neighbor_firms(worker, model)
     new_firms = push!(neighboring_firms, startup)
     efforts = [compute_effort(worker.Theta, firm) for firm in new_firms]
-    println("efforts: ", efforts)
     sizes = [get_size(firm) + 1 for firm in new_firms]
     outputs = [get_output(firm) for firm in new_firms]
-    println("outputs: ", outputs)
     utilities = [compute_utility(worker.Theta,
                                  outputs[i]/sizes[i],
                                  efforts[i])
@@ -173,6 +171,7 @@ function worker_step!(worker::Worker, model::AgentBasedModel)
         new_firm = choose_firm(worker, model.max_firm_id + 1, model)
         model.max_firm_id = max(model.max_firm_id, new_firm.id)
         if new_firm.id == model.max_firm_id
+            println("created new startup with id: ", new_firm.id)
             push!(model.firms, new_firm)
         end
     end
@@ -185,12 +184,13 @@ function firms(;
     seed = 42
 )
     space = nothing
+    num_firms = num_workers
     properties = Dict{Symbol, Any}(
         :num_workers => num_workers,
         :active_workers => active_workers,
         :num_friends => num_friends,
         :firms => Firm[],
-        :max_firm_id => 0
+        :max_firm_id => num_firms
     )
     model = AgentBasedModel(
         Worker,
