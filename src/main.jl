@@ -1,7 +1,9 @@
 using Agents, Random
 
 
-const Period = Int64 # step of simulation
+# ========================================
+# Constants
+
 const Effort = Float64
 const Wage = Float64
 
@@ -22,6 +24,7 @@ mutable struct Firm
     id::Int64
     book::Array{Worker, 1} # Dict # {Worker, Int64}
 end
+
 
 # ========================================
 # Worker
@@ -65,6 +68,44 @@ function get_neighbor_firms(worker::Worker, model::AgentBasedModel)
     end
 end
 
+function update_effort(worker::Worker)
+    worker.effort = optimal_effort(worker.Theta, get_efforts(worker.employer) - worker.effort)
+    o = get_output(worker.employer)
+    s = get_size(worker.employer)
+    worker.utility = compute_utility(worker.Theta,
+                                     o==0.0 && s==0.0 ? 1.0 : o/s,
+                                     worker.effort)
+end
+
+function separation(worker::Worker, firm::Firm)
+    worker.employer = nothing
+    separate(firm, worker)
+end
+
+function hiring(worker::Worker, firm::Firm)
+    worker.employer = firm
+    hire(firm, worker)
+end
+
+function migration(worker::Worker, new_firm::Firm)
+    separation(worker, worker.employer)
+    hiring(worker, new_firm)
+end
+
+function choose_firm(worker::Worker, max_firm_id::Int64, model::AgentBasedModel)
+    startup = Firm(max_firm_id, Worker[])
+    new_firm, new_effort, new_utility = get_best_firm(worker, startup, model)
+    update_efforts(worker.employer)
+    update_effort(worker)
+    if new_utility > worker.utility
+        migration(worker, new_firm)
+        worker.effort = new_effort
+        worker.utility = new_utility
+    end
+    return new_firm
+end
+
+
 # ========================================
 # Firm
 
@@ -105,6 +146,10 @@ function update_efforts(firm::Firm)
     end
 end
 
+
+# ========================================
+# Formulas
+
 function compute_utility(Theta::Float64, wage::Wage, effort::Effort)
     W = wage
     E = effort
@@ -119,42 +164,9 @@ function optimal_effort(Theta::Float64, effort::Effort)
     return max(0, min(1, e_star))
 end
 
-function update_effort(worker::Worker)
-    worker.effort = optimal_effort(worker.Theta, get_efforts(worker.employer) - worker.effort)
-    o = get_output(worker.employer)
-    s = get_size(worker.employer)
-    worker.utility = compute_utility(worker.Theta,
-                                     o==0.0 && s==0.0 ? 1.0 : o/s,
-                                     worker.effort)
-end
 
-function separation(worker::Worker, firm::Firm)
-    worker.employer = nothing
-    separate(firm, worker)
-end
-
-function hiring(worker::Worker, firm::Firm)
-    worker.employer = firm
-    hire(firm, worker)
-end
-
-function migration(worker::Worker, new_firm::Firm)
-    separation(worker, worker.employer)
-    hiring(worker, new_firm)
-end
-
-function choose_firm(worker::Worker, max_firm_id::Int64, model::AgentBasedModel)
-    startup = Firm(max_firm_id, Worker[])
-    new_firm, new_effort, new_utility = get_best_firm(worker, startup, model)
-    update_efforts(worker.employer)
-    update_effort(worker)
-    if new_utility > worker.utility
-        migration(worker, new_firm)
-        worker.effort = new_effort
-        worker.utility = new_utility
-    end
-    return new_firm
-end
+# ========================================
+# Simulation
 
 function worker_step!(worker::Worker, model::AgentBasedModel)
     if rand() < model.active_workers
