@@ -1,4 +1,4 @@
-using Agents, Random
+using Agents, Random, Distributions
 
 
 # ========================================
@@ -6,6 +6,7 @@ using Agents, Random
 
 const Effort = Float64
 const Wage = Float64
+const Step = Int64
 
 
 # ========================================
@@ -23,6 +24,8 @@ end
 mutable struct Firm
     id::Int64
     book::Array{Worker, 1} # Dict # {Worker, Int64}
+    creationStep::Step
+    deletionStep::Step
 end
 
 
@@ -75,9 +78,9 @@ function update_effort(worker::Worker)
     worker.utility = compute_utility(worker.Theta, outputs/sizes, worker.effort)
 end
 
-function separation(worker::Worker, firm::Firm)
+function separation(worker::Worker, firm::Firm, step::Step)
     worker.employer = nothing
-    separate(firm, worker)
+    separate(firm, worker, step)
 end
 
 function hiring(worker::Worker, firm::Firm)
@@ -85,14 +88,21 @@ function hiring(worker::Worker, firm::Firm)
     hire(firm, worker)
 end
 
-function migration(worker::Worker, new_firm::Firm)
-    separation(worker, worker.employer)
+function migration(worker::Worker, new_firm::Firm, step::Step)
+    separation(worker, worker.employer, step)
     hiring(worker, new_firm)
 end
 
 function get_best_firm(worker::Worker, startup::Firm, model::AgentBasedModel)
     neighboring_firms = get_neighbor_firms(worker, model)
-    new_firms = push!(neighboring_firms, startup)
+    new_firms_ = push!(neighboring_firms, startup)
+    # operate on copies from now on
+    new_firms = deepcopy(new_firms_)
+    worker = deepcopy(worker)
+    for f in new_firms
+        # speculatively hire the worker
+        hiring(worker, f)
+    end
     efforts = [compute_effort(worker.Theta, firm) for firm in new_firms]
     sizes = [get_size(firm) + 1 for firm in new_firms]
     outputs = [get_output(firm) for firm in new_firms]
@@ -101,17 +111,15 @@ function get_best_firm(worker::Worker, startup::Firm, model::AgentBasedModel)
                                  efforts[i])
                  for i=1:length(new_firms)]
     best_index = argmax(utilities)
-    return new_firms[best_index], efforts[best_index], utilities[best_index]
+    # return reference to actual firm
+    return new_firms_[best_index], efforts[best_index], utilities[best_index]
 end
 
-function choose_firm(worker::Worker, max_firm_id::Int64, model::AgentBasedModel)
-    startup = Firm(max_firm_id, Worker[])
+function choose_firm(worker::Worker, new_firm_id::Int64, model::AgentBasedModel)
+    startup = Firm(new_firm_id, Worker[], model.step, -1)
     new_firm, new_effort, new_utility = get_best_firm(worker, startup, model)
-    update_efforts(worker.employer)
-    update_effort(worker)
-    if new_utility > worker.utility
-        println("migrating: ", new_utility, " <- ", worker.utility)
-        migration(worker, new_firm)
+    if new_firm != worker.employer
+        migration(worker, new_firm, model.step)
         worker.effort = new_effort
         worker.utility = new_utility
     end
@@ -126,8 +134,11 @@ function hire(firm::Firm, worker::Worker)
     push!(firm.book, worker)
 end
 
-function separate(firm::Firm, worker::Worker)
+function separate(firm::Firm, worker::Worker, step::Step)
     deleteat!(firm.book, findall(x->x==worker, firm.book))
+    if length(firm.book) == 0
+        firm.deletionStep =step
+    end
 end
 
 function compute_effort(Theta::Float64, firm::Firm)
@@ -168,10 +179,17 @@ end
 
 function worker_step!(worker::Worker, model::AgentBasedModel)
     if rand() < model.active_workers
+        # update state
+        update_efforts(worker.employer)
+        update_effort(worker)
+        model.step += 1
+
+        # consider creation of new companies
+        old_max_firm_id = model.max_firm_id
         new_firm = choose_firm(worker, model.max_firm_id + 1, model)
-        model.max_firm_id = max(model.max_firm_id, new_firm.id)
-        if new_firm.id == model.max_firm_id
-            println("created new startup with id: ", new_firm.id)
+        if new_firm.id > old_max_firm_id
+            model.max_firm_id = new_firm.id
+            # println("created new startup with id: ", new_firm.id)
             push!(model.firms, new_firm)
         end
     end
@@ -180,7 +198,7 @@ end
 function firms(;
     num_workers = 10,
     active_workers = 0.4,
-    num_friends = 4,
+    num_friends = [2, 6],
     seed = 42
 )
     space = nothing
@@ -190,7 +208,8 @@ function firms(;
         :active_workers => active_workers,
         :num_friends => num_friends,
         :firms => Firm[],
-        :max_firm_id => num_firms
+        :max_firm_id => num_firms,
+        :step => 0
     )
     model = AgentBasedModel(
         Worker,
@@ -221,8 +240,10 @@ function firms(;
     for wid in 1:num_workers
         w = model.agents[wid]
 
+        num_friends_max = rand(model.rng,
+                               DiscreteUniform(num_friends[1], num_friends[2]))
         num_friends_w = 0
-        while num_friends_w < num_friends
+        while num_friends_w < num_friends_max
             f = random_agent(model)
             if f != w
                 push!(w.friends, f)
@@ -234,7 +255,29 @@ function firms(;
     return model
 end
 
-model = firms()
+# ========================================
+# Evaluation
 
-step!(model, worker_step!, 10)
+using Plots;
 
+function playground()
+    model = firms(num_workers=100, seed=rand(1:1001));
+
+    worker_counts = []
+    max_steps = 10000
+    for i in 1:100:max_steps
+        step!(model, worker_step!, 100);
+        push!(worker_counts, [length(f.book) for f in model.firms])
+    end
+
+    non_zero_worker_counts = [sort(filter(x -> x!=0, worker_count))
+                              for worker_count in worker_counts]
+
+    histogram(non_zero_worker_count)
+
+    sum(worker_count)
+    length(worker_count)
+
+    model.step
+
+end
