@@ -29,7 +29,7 @@ mutable struct Firm
 end
 
 function Firm(id::Int64, book::Array{Worker, 1})
-    return Firm(id, book, 0, 0)
+    return Firm(id, book, 0, -1)
 end
 
 # ========================================
