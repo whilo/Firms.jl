@@ -273,11 +273,16 @@ end
 # Evaluation
 
 using Plots;
+using ProfileView;
 
 function playground()
     model = firms(num_workers=100, seed=rand(1:1001));
 
     @time step!(model, worker_step!, 100);
+
+    @profview step!(model, worker_step!, 1);
+
+
 
     @code_warntype worker_step!(model.agents[1], model)
 
