@@ -5,49 +5,60 @@ using Agents, Random, Distributions
 # Constants
 
 const Effort = Float64
+const Utility = Float64
 const Wage = Float64
 const Step = Int64
+const FirmID = Int64
+const WorkerID = Int64
 
 
 # ========================================
 # Structs
 
 mutable struct Worker <: AbstractAgent
-    id::Int64
+    id::WorkerID
     Theta::Float64
     employer::Any # Ideally, but circular: Union{Firm, Nothing}
-    effort::Float64
-    utility::Float64
+    effort::Effort
+    utility::Utility
     friends::Array{Worker, 1}
 end
 
 mutable struct Firm
-    id::Int64
+    id::FirmID
     book::Array{Worker, 1} # Dict # {Worker, Int64}
     creationStep::Step
     deletionStep::Step
 end
 
-function Firm(id::Int64, book::Array{Worker, 1})
+function Firm(id::FirmID, book::Array{Worker, 1})
     return Firm(id, book, 0, -1)
 end
+
+Base.show(io::IO, f::Firm) = begin
+    print(io, "Firm: ", f.id, ", born: ", f.creationStep);
+    if (f.deletionStep != -1)
+        print(io, " died: ", f.deletionStep)
+    end
+end
+
 
 # ========================================
 # Worker
 
-function get_size(firm::Nothing)
+function get_size(firm::Nothing)::Int64
     return 0
 end
 
-function get_size(firm::Firm)
+function get_size(firm::Firm)::Int64
     return length(firm.book)
 end
 
-function get_efforts(firm::Nothing)
+function get_efforts(firm::Nothing)::Effort
     return 0.0 # TODO check
 end
 
-function get_efforts(firm::Firm)
+function get_efforts(firm::Firm)::Effort
     if isempty(firm.book)
         return 0.0
     else
@@ -55,16 +66,16 @@ function get_efforts(firm::Firm)
     end
 end
 
-function get_output(firm::Nothing)
+function get_output(firm::Nothing)::Float64
     return 0.0
 end
 
-function get_output(firm::Firm)
+function get_output(firm::Firm)::Float64
     Es = get_efforts(firm)
     return Es + Es^2
 end
 
-function get_neighbor_firms(worker::Worker, model::AgentBasedModel)
+function get_neighbor_firms(worker::Worker, model::AgentBasedModel)::Array{Firm, 1}
     if rand(model.rng) > 0.01
         return unique([friend.employer for friend in worker.friends
                            if friend.employer != worker.employer])
@@ -96,7 +107,7 @@ function migration(worker::Worker, new_firm::Firm, step::Step)
     hiring(worker, new_firm)
 end
 
-function get_best_firm(worker::Worker, startup::Firm, model::AgentBasedModel)
+function get_best_firm(worker::Worker, startup::Firm, model::AgentBasedModel)::Tuple{Firm, Effort, Utility}
     neighboring_firms = get_neighbor_firms(worker, model)
     new_firms_ = push!(neighboring_firms, startup)
     # operate on copies from now on
@@ -118,7 +129,7 @@ function get_best_firm(worker::Worker, startup::Firm, model::AgentBasedModel)
     return new_firms_[best_index], efforts[best_index], utilities[best_index]
 end
 
-function choose_firm(worker::Worker, new_firm_id::Int64, model::AgentBasedModel)
+function choose_firm(worker::Worker, new_firm_id::Int64, model::AgentBasedModel)::Firm
     startup = Firm(new_firm_id, Worker[], model.step, -1)
     new_firm, new_effort, new_utility = get_best_firm(worker, startup, model)
     if new_firm != worker.employer
@@ -144,7 +155,7 @@ function separate(firm::Firm, worker::Worker, step::Step)
     end
 end
 
-function compute_effort(Theta::Float64, firm::Firm)
+function compute_effort(Theta::Float64, firm::Firm)::Effort
     E = get_efforts(firm)
     return optimal_effort(Theta, E)
 end
@@ -162,14 +173,14 @@ end
 # ========================================
 # Formulas
 
-function compute_utility(Theta::Float64, wage::Wage, effort::Effort)
+function compute_utility(Theta::Float64, wage::Wage, effort::Effort)::Utility
     W = wage
     E = effort
     Θ = Theta
     return W^Θ * (1-E)^(1-Θ)
 end
 
-function optimal_effort(Theta::Float64, effort::Effort)
+function optimal_effort(Theta::Float64, effort::Effort)::Effort
     E = effort
     Θ = Theta
     e_star = (-1 - 2*(E - Θ) + (1 + 4*Θ^2*(1+E)*(2+E))^(1/2)) / (2 * (1 + Θ))
@@ -181,15 +192,15 @@ end
 # Simulation
 
 function worker_step!(worker::Worker, model::AgentBasedModel)
-    if rand() < model.active_workers
+    if rand() < model.active_workers::Float64
         # update state
-        update_efforts(worker.employer)
+        update_efforts(worker.employer::Firm)
         update_effort(worker)
         model.step += 1
 
         # consider creation of new companies
-        old_max_firm_id = model.max_firm_id
-        new_firm = choose_firm(worker, model.max_firm_id + 1, model)
+        old_max_firm_id = model.max_firm_id::FirmID
+        new_firm = choose_firm(worker, old_max_firm_id + 1, model)
         if new_firm.id > old_max_firm_id
             model.max_firm_id = new_firm.id
             # println("created new startup with id: ", new_firm.id)
@@ -265,6 +276,16 @@ using Plots;
 
 function playground()
     model = firms(num_workers=100, seed=rand(1:1001));
+
+    @time step!(model, worker_step!, 100);
+
+    @code_warntype worker_step!(model.agents[1], model)
+
+    @code_warntype choose_firm(model.agents[1], 1, model)
+
+    @code_warntype get_best_firm(model.agents[1], Firm(1, Worker[]), model)
+
+
 
     worker_counts = []
     max_steps = 10000
