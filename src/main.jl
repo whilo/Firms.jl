@@ -42,9 +42,18 @@ Base.show(io::IO, f::Firm) = begin
     end
 end
 
+Base.copy(w::Worker) = Worker(w.id, w.Theta, copy(w.employer), w.effort, w.utility, w.friends)
+
+Base.copy(f::Firm) = Firm(f.id, copy(f.book), f.creationStep, f.deletionStep)
+
 
 # ========================================
 # Worker
+
+function my_random_agent(model::AgentBasedModel)::Worker
+    model.agents[rand(model.rng,
+                      DiscreteUniform(1, length(model.agents)))]::Worker
+end
 
 function get_size(firm::Nothing)::Int64
     return 0
@@ -59,10 +68,14 @@ function get_efforts(firm::Nothing)::Effort
 end
 
 function get_efforts(firm::Firm)::Effort
+    s = 0.0
     if isempty(firm.book)
-        return 0.0
+        return s
     else
-        return sum([worker.effort for worker in firm.book])
+        for worker in firm.book
+            s += worker.effort
+        end
+        return s # sum([worker.effort for worker in firm.book])
     end
 end
 
@@ -77,11 +90,11 @@ end
 
 function get_neighbor_firms(worker::Worker, model::AgentBasedModel)::Array{Firm, 1}
     if rand(model.rng) > 0.01
-        return unique([friend.employer for friend in worker.friends
+        return unique([friend.employer::Firm for friend::Worker in worker.friends
                            if friend.employer != worker.employer])
     else # generates Zipf law:
-        return unique([friend.employer for friend in random_agent(model).friends
-                           if friend.employer != worker.employer])
+        return unique([friend.employer::Firm for friend::Worker in my_random_agent(model).friends
+                               if friend.employer != worker.employer])
     end
 end
 
@@ -111,8 +124,9 @@ function get_best_firm(worker::Worker, startup::Firm, model::AgentBasedModel)::T
     neighboring_firms = get_neighbor_firms(worker, model)
     new_firms_ = push!(neighboring_firms, startup)
     # operate on copies from now on
-    new_firms = deepcopy(new_firms_)
-    worker = deepcopy(worker)
+    new_firms = [copy(f) for f in new_firms_] # deepcopy(new_firms_)
+    worker = copy(worker)
+    worker.employer = copy(worker.employer)
     for f in new_firms
         # speculatively hire the worker
         hiring(worker, f)
@@ -232,6 +246,7 @@ function firms(;
         properties = properties,
         rng = MersenneTwister(seed)
     )
+    workers = Worker[]
     for wid in 1:num_workers
         Theta = rand(model.rng)
         effort = optimal_effort(Theta, 0.0)
@@ -247,18 +262,20 @@ function firms(;
         worker.employer = firm
         add_agent!(worker, model)
         # add one company for each worker
-        push!(model.firms, firm)
+        push!(model.firms::Array{Firm, 1}, firm)
     end
 
     # social network
     for wid in 1:num_workers
-        w = model.agents[wid]
+        w = model.agents[wid]::Worker
 
         num_friends_max = rand(model.rng,
                                DiscreteUniform(num_friends[1], num_friends[2]))
         num_friends_w = 0
         while num_friends_w < num_friends_max
-            f = random_agent(model)
+            f = my_random_agent(model)
+
+            #f = random_agent(model)::Worker
             if f != w
                 push!(w.friends, f)
                 num_friends_w += 1
@@ -276,9 +293,9 @@ using Plots;
 using ProfileView;
 
 function playground()
-    model = firms(num_workers=100, seed=rand(1:1001));
+    model = @time firms(num_workers=1000000, seed=rand(1:1001));
 
-    @time step!(model, worker_step!, 100);
+    @time step!(model, worker_step!, 1);
 
     @profview step!(model, worker_step!, 1);
 
@@ -290,12 +307,13 @@ function playground()
 
     @code_warntype get_best_firm(model.agents[1], Firm(1, Worker[]), model)
 
+    sum([length(f.book) for f in model.firms])
 
 
     worker_counts = []
-    max_steps = 10000
-    for i in 1:100:max_steps
-        step!(model, worker_step!, 100);
+    max_steps = 200
+    for i in 1:max_steps
+        step!(model, worker_step!, 1);
         push!(worker_counts, [length(f.book) for f in model.firms])
     end
 
