@@ -1,0 +1,43 @@
+* Firms.jl
+  :PROPERTIES:
+  :CUSTOM_ID: h:cd69ba2d-04f2-4252-a107-f246f2f5f318
+  :END:
+
+** Introduction
+   :PROPERTIES:
+   :CUSTOM_ID: h:609fd5c9-6280-435e-a88c-36bfb3bd2ec2
+   :END:
+   TODO
+
+  
+** Problem 
+   :PROPERTIES:
+   :CUSTOM_ID: h:f2f42047-cdef-488a-8732-7f89fab2f086
+   :END:
+   - scale up simulation
+  
+** Approach 
+   :PROPERTIES:
+   :CUSTOM_ID: h:40e55f8a-3f8c-4348-851f-306008645e1f
+   :END:
+   - share calculation of effort between different employment scenarios
+   - coarse graining, projection of simulation
+
+** Issues
+   :PROPERTIES:
+   :CUSTOM_ID: h:50782a46-1ce8-4446-a239-e16d575e650d
+   :END:
+   - problem scaling up
+   - symmetric friendship network
+   - 
+
+** Agenda
+   :PROPERTIES:
+   :CUSTOM_ID: h:538c6dda-b502-45c4-8f8c-7b57e4aac5b9
+   :END:
+   - implement convergence metrics/plots
+     + changes in assignments/job changes
+     + firm size distribution
+     + age distribution
+   - visualize friendship network
+

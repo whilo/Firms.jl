@@ -26,12 +26,12 @@ end
 
 mutable struct Firm
     id::FirmID
-    book::Array{Worker, 1} # Dict # {Worker, Int64}
+    book::Set{Worker} # Dict # {Worker, Int64}
     creationStep::Step
     deletionStep::Step
 end
 
-function Firm(id::FirmID, book::Array{Worker, 1})
+function Firm(id::FirmID, book::Set{Worker})
     return Firm(id, book, 0, -1)
 end
 
@@ -67,6 +67,27 @@ function get_efforts(firm::Nothing)::Effort
     return 0.0 # TODO check
 end
 
+# CACHE_THRESHOLD = 10
+# firm_cache = Dict()
+
+# function get_efforts(firm::Firm)::Effort
+#     # if rand() < 0.01
+#     #     global firm_cache = Dict()
+#     # end
+
+#     if length(firm.book) > CACHE_THRESHOLD
+#         if haskey(firm_cache, firm)
+#             return firm_cache[firm]
+#         else
+#             effort = get_efforts_real(firm)
+#             firm_cache[firm] = effort
+#             return effort
+#         end
+#     else
+#         return get_efforts_real(firm)
+#     end
+# end
+
 function get_efforts(firm::Firm)::Effort
     s = 0.0
     if isempty(firm.book)
@@ -90,8 +111,9 @@ end
 
 function get_neighbor_firms(worker::Worker, model::AgentBasedModel)::Array{Firm, 1}
     if rand(model.rng) > 0.01
-        return unique([friend.employer::Firm for friend::Worker in worker.friends
-                           if friend.employer != worker.employer])
+        return [friend.employer::Firm for friend::Worker in worker.friends
+                    # if friend.employer != worker.employer
+                        ] # unique()
     else # generates Zipf law:
         return unique([friend.employer::Firm for friend::Worker in my_random_agent(model).friends
                                if friend.employer != worker.employer])
@@ -144,7 +166,7 @@ function get_best_firm(worker::Worker, startup::Firm, model::AgentBasedModel)::T
 end
 
 function choose_firm(worker::Worker, new_firm_id::Int64, model::AgentBasedModel)::Firm
-    startup = Firm(new_firm_id, Worker[], model.step, -1)
+    startup = Firm(new_firm_id, Set{Worker}(), model.step, -1)
     new_firm, new_effort, new_utility = get_best_firm(worker, startup, model)
     if new_firm != worker.employer
         migration(worker, new_firm, model.step)
@@ -163,9 +185,10 @@ function hire(firm::Firm, worker::Worker)
 end
 
 function separate(firm::Firm, worker::Worker, step::Step)
-    deleteat!(firm.book, findall(x->x==worker, firm.book))
+    # deleteat!(firm.book, findall(x->x==worker, firm.book))
+    delete!(firm.book, worker)
     if length(firm.book) == 0
-        firm.deletionStep =step
+        firm.deletionStep = step
     end
 end
 
@@ -206,7 +229,7 @@ end
 # Simulation
 
 function worker_step!(worker::Worker, model::AgentBasedModel)
-    if rand() < model.active_workers::Float64
+    if rand(model.rng) < model.active_workers::Float64
         # update state
         update_efforts(worker.employer::Firm)
         update_effort(worker)
@@ -225,7 +248,7 @@ end
 
 function firms(;
     num_workers = 10,
-    active_workers = 0.4,
+    active_workers = 0.04,
     num_friends = [2, 6],
     seed = 42
 )
@@ -258,7 +281,7 @@ function firms(;
                         effort,
                         compute_utility(Theta, effort, effort),
                         friends)
-        firm = Firm(wid, Worker[worker])
+        firm = Firm(wid, Set([worker]))
         worker.employer = firm
         add_agent!(worker, model)
         # add one company for each worker
@@ -295,7 +318,9 @@ using ProfileView;
 function playground()
     model = @time firms(num_workers=1000000, seed=rand(1:1001));
 
-    @time step!(model, worker_step!, 1);
+    for i in 1:450
+        @time step!(model, worker_step!, 1);
+    end
 
     @profview step!(model, worker_step!, 1);
 
@@ -311,16 +336,16 @@ function playground()
 
 
     worker_counts = []
-    max_steps = 200
+    max_steps = 10
     for i in 1:max_steps
-        step!(model, worker_step!, 1);
+        @time step!(model, worker_step!, 1);
         push!(worker_counts, [length(f.book) for f in model.firms])
     end
 
     non_zero_worker_counts = [sort(filter(x -> x!=0, worker_count))
                               for worker_count in worker_counts]
 
-    histogram(non_zero_worker_count)
+    histogram(non_zero_worker_counts[10])
 
     sum(worker_count)
     length(worker_count)
