@@ -217,8 +217,9 @@ function compute_utility(Theta::Float64, wage::Wage, effort::Effort)::Utility
     return W^Θ * (1-E)^(1-Θ)
 end
 
-function optimal_effort(Theta::Float64, effort::Effort)::Effort
-    E = effort
+function optimal_effort(Theta::Float64, team_effort::Effort)::Effort
+    # See Formula 2 from "Endogenous Firms and Their Dynamics (Axtell, 2013)"
+    E = team_effort
     Θ = Theta
     e_star = (-1 - 2*(E - Θ) + (1 + 4*Θ^2*(1+E)*(2+E))^(1/2)) / (2 * (1 + Θ))
     return max(0, min(1, e_star))
@@ -315,16 +316,27 @@ end
 using Plots;
 using ProfileView;
 
-function playground()
-    model = @time firms(num_workers=1000000, seed=rand(1:1001));
-
-    for i in 1:450
-        @time step!(model, worker_step!, 1);
+function get_avg_efforts(model)
+    efforts = 0
+    for (id, worker) in model.agents
+        efforts += worker.effort
     end
+    return efforts / length(model.agents)
+end
+
+function get_avg_utilities(model)
+    utilities = 0
+    for (id, worker) in model.agents
+        utilities += worker.utility
+    end
+    return utilities / length(model.agents)
+end
+
+function playground()
+    model = @time firms(num_workers=10000, seed=rand(1:1001));
+
 
     @profview step!(model, worker_step!, 1);
-
-
 
     @code_warntype worker_step!(model.agents[1], model)
 
@@ -336,17 +348,24 @@ function playground()
 
 
     worker_counts = []
-    max_steps = 10
+    avg_efforts = []
+    avg_utilities = []
+    max_steps = 2000
     for i in 1:max_steps
         @time step!(model, worker_step!, 1);
         push!(worker_counts, [length(f.book) for f in model.firms])
+        push!(avg_efforts, get_avg_efforts(model))
+        push!(avg_utilities, get_avg_utilities(model))
+        println("Iteration: ", i)
     end
+
+    plot(avg_efforts, title="Avg Effort")  # Axtell AAMAS Figure 3
+    plot(avg_utilities, title="Avg Utility") #            Figure 4
 
     non_zero_worker_counts = [sort(filter(x -> x!=0, worker_count))
                               for worker_count in worker_counts]
 
-    histogram(non_zero_worker_counts[10])
-
+    histogram(non_zero_worker_counts[end], yscale=:log10) # Figure 6
     sum(worker_count)
     length(worker_count)
 
