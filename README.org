@@ -15,11 +15,14 @@
    :CUSTOM_ID: h:f2f42047-cdef-488a-8732-7f89fab2f086
    :END:
    - scale up simulation
+   - validate plots
   
 ** Approach 
    :PROPERTIES:
    :CUSTOM_ID: h:40e55f8a-3f8c-4348-851f-306008645e1f
    :END:
+   - remove cyclicity between Firm and Worker by using Firm ID
+   - pass model to respective functions for firm lookup
    - share calculation of effort between different employment scenarios
    - coarse graining, projection of simulation
 
@@ -29,7 +32,7 @@
    :END:
    - problem scaling up
    - symmetric friendship network
-   - 
+   - how is Rob creating the friendship network?
 
 ** Agenda
    :PROPERTIES:

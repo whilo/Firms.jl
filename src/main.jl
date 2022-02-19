@@ -18,7 +18,7 @@ const WorkerID = Int64
 mutable struct Worker <: AbstractAgent
     id::WorkerID
     Theta::Float64
-    employer::Any # Ideally, but circular: Union{Firm, Nothing}
+    employer::FirmID
     effort::Effort
     utility::Utility
     friends::Array{Worker, 1}
@@ -35,6 +35,8 @@ function Firm(id::FirmID, book::Set{Worker})
     return Firm(id, book, 0, -1)
 end
 
+VOID_FIRM_ID = 0
+
 Base.show(io::IO, f::Firm) = begin
     print(io, "Firm: ", f.id, ", born: ", f.creationStep);
     if (f.deletionStep != -1)
@@ -42,7 +44,7 @@ Base.show(io::IO, f::Firm) = begin
     end
 end
 
-Base.copy(w::Worker) = Worker(w.id, w.Theta, copy(w.employer), w.effort, w.utility, w.friends)
+Base.copy(w::Worker) = Worker(w.id, w.Theta, w.employer, w.effort, w.utility, w.friends)
 
 Base.copy(f::Firm) = Firm(f.id, copy(f.book), f.creationStep, f.deletionStep)
 
@@ -55,16 +57,8 @@ function my_random_agent(model::AgentBasedModel)::Worker
                       DiscreteUniform(1, length(model.agents)))]::Worker
 end
 
-function get_size(firm::Nothing)::Int64
-    return 0
-end
-
 function get_size(firm::Firm)::Int64
     return length(firm.book)
-end
-
-function get_efforts(firm::Nothing)::Effort
-    return 0.0 # TODO check
 end
 
 # CACHE_THRESHOLD = 10
@@ -92,53 +86,66 @@ function get_efforts(firm::Firm)::Effort
     s = 0.0
     if isempty(firm.book)
         return s
-    else
+    else # sum up
         for worker in firm.book
             s += worker.effort
         end
-        return s # sum([worker.effort for worker in firm.book])
+        return s
     end
 end
 
-function get_output(firm::Nothing)::Float64
-    return 0.0
-end
-
 function get_output(firm::Firm)::Float64
+    if firm.id == VOID_FIRM_ID
+        return 0.0
+    end
+
     Es = get_efforts(firm)
     return Es + Es^2
 end
 
 function get_neighbor_firms(worker::Worker, model::AgentBasedModel)::Array{Firm, 1}
+    firms = model.firms
     if rand(model.rng) > 0.01
-        return [friend.employer::Firm for friend::Worker in worker.friends
+        return [firms[friend.employer]::Firm for friend::Worker in worker.friends
                     # if friend.employer != worker.employer
                         ] # unique()
     else # generates Zipf law:
-        return unique([friend.employer::Firm for friend::Worker in my_random_agent(model).friends
+        return unique([firms[friend.employer]::Firm for friend::Worker in my_random_agent(model).friends
                                if friend.employer != worker.employer])
     end
 end
 
-function update_effort(worker::Worker)
-    worker.effort = optimal_effort(worker.Theta, get_efforts(worker.employer) - worker.effort)
-    outputs = get_output(worker.employer)
-    sizes = get_size(worker.employer)
+function update_effort(model::AgentBasedModel, worker::Worker)
+    firms = model.firms
+    employer = firms[worker.employer]::Firm
+    worker.effort = optimal_effort(worker.Theta, get_efforts(employer) - worker.effort)
+    outputs = get_output(employer)
+    sizes = get_size(employer)
     worker.utility = compute_utility(worker.Theta, outputs/sizes, worker.effort)
 end
 
-function separation(worker::Worker, firm::Firm, step::Step)
-    worker.employer = nothing
-    separate(firm, worker, step)
+function separation(model::AgentBasedModel, worker::Worker, firm::Firm)
+    step = model.scheduler.n::Step
+    worker.employer = VOID_FIRM_ID
+
+    # firm
+    delete!(firm.book, worker)
+    if length(firm.book) == 0
+        firm.deletionStep = step
+    end
 end
 
 function hiring(worker::Worker, firm::Firm)
-    worker.employer = firm
-    hire(firm, worker)
+    worker.employer = firm.id
+
+    # firm
+    @assert firm.id != VOID_FIRM_ID
+    push!(firm.book, worker)
 end
 
-function migration(worker::Worker, new_firm::Firm, step::Step)
-    separation(worker, worker.employer, step)
+function migration(model::AgentBasedModel, worker::Worker, new_firm::Firm)
+    firms = model.firms
+    separation(model, worker, firms[worker.employer])
     hiring(worker, new_firm)
 end
 
@@ -148,7 +155,7 @@ function get_best_firm(worker::Worker, startup::Firm, model::AgentBasedModel)::T
     # operate on copies from now on
     new_firms = [copy(f) for f in new_firms_] # deepcopy(new_firms_)
     worker = copy(worker)
-    worker.employer = copy(worker.employer)
+    # worker.employer = copy(worker.employer)
     for f in new_firms
         # speculatively hire the worker
         hiring(worker, f)
@@ -166,10 +173,11 @@ function get_best_firm(worker::Worker, startup::Firm, model::AgentBasedModel)::T
 end
 
 function choose_firm(worker::Worker, new_firm_id::Int64, model::AgentBasedModel)::Firm
-    startup = Firm(new_firm_id, Set{Worker}(), model.step, -1)
+    startup = Firm(new_firm_id, Set{Worker}(), model.scheduler.n, -1)
     new_firm, new_effort, new_utility = get_best_firm(worker, startup, model)
-    if new_firm != worker.employer
-        migration(worker, new_firm, model.step)
+    firms = model.firms
+    if new_firm != firms[worker.employer]
+        migration(model, worker, new_firm)
         worker.effort = new_effort
         worker.utility = new_utility
     end
@@ -180,29 +188,18 @@ end
 # ========================================
 # Firm
 
-function hire(firm::Firm, worker::Worker)
-    push!(firm.book, worker)
-end
-
-function separate(firm::Firm, worker::Worker, step::Step)
-    # deleteat!(firm.book, findall(x->x==worker, firm.book))
-    delete!(firm.book, worker)
-    if length(firm.book) == 0
-        firm.deletionStep = step
-    end
-end
-
 function compute_effort(Theta::Float64, firm::Firm)::Effort
     E = get_efforts(firm)
     return optimal_effort(Theta, E)
 end
 
-function update_efforts(firm::Nothing)
-end
+function update_efforts(model::AgentBasedModel, firmID::FirmID)
+    firms = model.firms
+    firm = firms[firmID]::Firm
+    @assert firm.id != VOID_FIRM_ID
 
-function update_efforts(firm::Firm)
     for worker in firm.book
-        update_effort(worker)
+        update_effort(model, worker)
     end
 end
 
@@ -229,21 +226,41 @@ end
 # ========================================
 # Simulation
 
-function worker_step!(worker::Worker, model::AgentBasedModel)
-    if rand(model.rng) < model.active_workers::Float64
-        # update state
-        update_efforts(worker.employer::Firm)
-        update_effort(worker)
-        model.step += 1
+mutable struct WorkerScheduler
+    n::Int # step number
+    p::Float64
+end
 
-        # consider creation of new companies
-        old_max_firm_id = model.max_firm_id::FirmID
-        new_firm = choose_firm(worker, old_max_firm_id + 1, model)
-        if new_firm.id > old_max_firm_id
-            model.max_firm_id = new_firm.id
-            # println("created new startup with id: ", new_firm.id)
-            push!(model.firms, new_firm)
-        end
+function (ws::WorkerScheduler)(model::ABM)
+    ws.n += 1 # increment internal counter by 1 each time its called
+
+    ids = collect(keys(model.agents))
+    subset = randsubseq(model.rng, ids, ws.p)
+    return subset
+
+    # be careful to use a *new* instance of this scheduler when plotting!
+    # if ms.n < 10
+    #     return allids(model) # order doesn't matter in this case
+    # else
+    #     ids = collect(allids(model))
+    #     # filter all ids whose agents have `w` less than some amount
+    #     filter!(id -> model[id].w < ms.w, ids)
+    #     return ids
+    # end
+end
+
+function worker_step!(worker::Worker, model::AgentBasedModel)
+    # update state
+    update_efforts(model, worker.employer)
+    update_effort(model, worker)
+
+    # consider creation of new companies
+    old_max_firm_id = model.max_firm_id::FirmID
+    new_firm = choose_firm(worker, old_max_firm_id + 1, model)
+    if new_firm.id > old_max_firm_id
+        model.max_firm_id = new_firm.id
+        # println("created new startup with id: ", new_firm.id)
+        push!(model.firms, new_firm)
     end
 end
 
@@ -263,18 +280,19 @@ function firms(;
         :max_firm_id => num_firms,
         :step => 0
     )
+    ws = WorkerScheduler(0, active_workers)
     model = AgentBasedModel(
         Worker,
         space,
-        scheduler = Schedulers.randomly, # TODO schedule subset
+        scheduler = ws,
         properties = properties,
         rng = MersenneTwister(seed)
     )
     workers = Worker[]
-    for wid in 1:num_workers
+    for wid in 1:num_firms
         Theta = rand(model.rng)
         effort = optimal_effort(Theta, 0.0)
-        employer = nothing
+        employer = wid
         friends = Worker[]
         worker = Worker(wid,
                         Theta,
@@ -283,7 +301,6 @@ function firms(;
                         compute_utility(Theta, effort, effort),
                         friends)
         firm = Firm(wid, Set([worker]))
-        worker.employer = firm
         add_agent!(worker, model)
         # add one company for each worker
         push!(model.firms::Array{Firm, 1}, firm)
@@ -316,7 +333,7 @@ end
 using Plots;
 using ProfileView;
 
-function get_avg_efforts(model)
+function get_avg_efforts(model::AgentBasedModel)
     efforts = 0
     for (id, worker) in model.agents
         efforts += worker.effort
@@ -324,17 +341,60 @@ function get_avg_efforts(model)
     return efforts / length(model.agents)
 end
 
-function get_avg_utilities(model)
+function get_avg_utilities(model::AgentBasedModel)
     utilities = 0
     for (id, worker) in model.agents
         utilities += worker.utility
     end
+
     return utilities / length(model.agents)
+end
+
+function test1()
+    num_workers = 10000
+    model = firms(num_workers=num_workers, seed=rand(1:1001));
+    for i in 1:20
+        step!(model, worker_step!, 1);
+    end
+    @assert sum([length(f.book) for f in model.firms]) == num_workers
+end
+
+function diagnosis_plots(models::Array{AgentBasedModel, 1})
+    avg_efforts = [get_avg_efforts(model) for model in models];
+    avg_utilities = [get_avg_utilities(model) for model in models];
+    worker_counts = [[length(f.book) for f in model.firms] for model in models];
+
+    plot(avg_efforts, title="Avg Effort")  # Axtell AAMAS Figure 3
+
+    plot(avg_utilities, title="Avg Utility") #            Figure 4
+
+    non_zero_worker_counts = [sort(filter(x -> x!=0, worker_count))
+                              for worker_count in worker_counts]
+
+    histogram(non_zero_worker_counts[end], yscale=:log10) # Figure 6
+end
+
+function test_simulation(num_workers::Int64, num_steps::Int64, seed::Int64, path::String)
+    model = firms(num_workers=num_workers, seed=seed);
+
+    models = [deepcopy(model)];
+    for i in 1:num_steps
+        println("iteration: ", i)
+        @time step!(model, worker_step!, 1);
+        println("copying model: ")
+        @time push!(models, deepcopy(model))
+    end
+
+    diagnosis_plots(models)
+    # TODO save models
 end
 
 function playground()
     model = @time firms(num_workers=10000, seed=rand(1:1001));
 
+    for i in 1:20
+        @time step!(model, worker_step!, 1);
+    end
 
     @profview step!(model, worker_step!, 1);
 
@@ -347,28 +407,30 @@ function playground()
     sum([length(f.book) for f in model.firms])
 
 
-    worker_counts = []
-    avg_efforts = []
-    avg_utilities = []
-    max_steps = 2000
+    models = [deepcopy(model)];
+    max_steps = 10
     for i in 1:max_steps
+        println("iteration: ", i)
         @time step!(model, worker_step!, 1);
-        push!(worker_counts, [length(f.book) for f in model.firms])
-        push!(avg_efforts, get_avg_efforts(model))
-        push!(avg_utilities, get_avg_utilities(model))
-        println("Iteration: ", i)
+        println("copying model: ")
+        @time push!(models, deepcopy(model))
     end
 
+
+
+
+    avg_efforts = [get_avg_efforts(model) for model in models];
+    avg_utilities = [get_avg_utilities(model) for model in models];
+    worker_counts = [[length(f.book) for f in model.firms] for model in models];
+
     plot(avg_efforts, title="Avg Effort")  # Axtell AAMAS Figure 3
+
     plot(avg_utilities, title="Avg Utility") #            Figure 4
 
     non_zero_worker_counts = [sort(filter(x -> x!=0, worker_count))
                               for worker_count in worker_counts]
 
     histogram(non_zero_worker_counts[end], yscale=:log10) # Figure 6
-    sum(worker_count)
-    length(worker_count)
 
-    model.step
 
 end
